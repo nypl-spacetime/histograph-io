@@ -14,29 +14,27 @@
     "body-parser": "^1.14.1",
     "busboy": "^0.2.11",
     "cors": "^2.7.1",
-    "elasticsearch": "^8.2.0",
+    "diff-utility": "histograph/node-diff-utility",
     "express": "^4.13.3",
     "fs-extra": "^0.16.5",
     "geojsonhint": "^1.1.0",
     "highland": "^2.5.1",
-    "diff-utility": "histograph/node-diff-utility",
     "histograph-config": "nypl-spacetime/histograph-config",
     "histograph-schemas": "nypl-spacetime/histograph-schemas",
-    "is-my-json-valid": "^2.12.2",
+    "is-my-json-valid": "^2.13.1",
+    "level": "^1.4.0",
     "ndjson": "^1.4.2",
-    "neo4j": "^2.0.0-alpha5",
     "passport": "^0.2.2",
     "passport-http": "^0.2.2",
     "redis": "^0.12.1",
     "request": "^2.65.0"
   },
   "devDependencies": {
-    "jscs": "^1.10.0",
-    "jshint": "^2.6.0",
+    "standard": "^6.0.8",
     "tape": "^3.4.0"
   },
   "scripts": {
-    "test": "jshint index.js lib && jscs index.js lib"
+    "test": "standard"
   },
   "author": "Bert Spaan",
   "license": "MIT",

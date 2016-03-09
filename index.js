@@ -1,185 +1,241 @@
-var fs = require('fs-extra');
-var path = require('path');
-var express = require('express');
-var Busboy = require('busboy');
-var bodyParser = require('body-parser');
-var cors = require('cors');
-var crypto = require('crypto');
-var basicAuth = require('basic-auth');
-var app = express();
-var diff = require('./lib/diff');
-var auth = require('./lib/auth');
-var db = require('./lib/db');
-var current = require('./lib/current');
-var validators = require('./lib/validators');
-var uploadedFile = require('./lib/uploaded-file');
-var config = require('histograph-config');
+var fs = require('fs-extra')
+var path = require('path')
+var express = require('express')
+var Busboy = require('busboy')
+var bodyParser = require('body-parser')
+var cors = require('cors')
+var crypto = require('crypto')
+var basicAuth = require('basic-auth')
+var app = express()
+var diff = require('./lib/diff')
+var auth = require('./lib/auth')
+var db = require('./lib/db')
+var current = require('./lib/current')
+var messages = require('./lib/messages')
+var queue = require('./lib/queue')
+var initialize = require('./lib/initialize')
+var validators = require('./lib/validators')
+var uploadedFile = require('./lib/uploaded-file')
+var config = require('histograph-config')
 
-var maxRealTimeCheckFileSize = 500000000;
+initialize()
+
+// If uploaded files are larger than 500MB, return directly and check file later
+//   Currently, when errors are encountered in such files, the API provides no
+//   way of letting users know...
+var maxRealTimeCheckFileSize = 500000000
 
 app.use(bodyParser.json({
   type: 'application/json'
-}));
+}))
 
 app.use(bodyParser.text({
   type: 'application/x-ndjson'
-}));
+}))
 
-app.use(cors());
+app.use(cors())
 
-function send200(res) {
+function send200 (res) {
   res.status(200).send({
     message: 'ok'
-  });
+  })
 }
 
-function send201(res) {
+function send201 (res) {
   res.status(201).send({
     message: 'ok'
-  });
+  })
 }
 
-function send404(res, type, id) {
+function send404 (res, type, id) {
   res.status(404).send({
-    message: type + ' \'' + id + '\' not found'
-  });
+    message: type + " '" + id + "' not found"
+  })
 }
 
-function send409(res, type, id) {
+function send409 (res, type, id) {
   res.status(409).send({
-    message: type + ' \'' + id + '\' already exists'
-  });
+    message: type + " '" + id + "' already exists"
+  })
 }
 
-app.get('/datasets', function(req, res) {
-  db.getDatasets(res, function(data) {
-    res.send(data);
-  });
-});
+function send500 (res, message) {
+  res.status(500).send({
+    message: message
+  })
+}
+
+app.get('/datasets', function (req, res) {
+  db.getDatasets(function (err, datasets) {
+    if (err) {
+      send500(err.message)
+    } else {
+      res.send(datasets)
+    }
+  })
+})
 
 app.post('/datasets',
   auth.owner,
-  function(req, res) {
-    var dataset = req.body;
+  function (req, res) {
+    var dataset = req.body
     if (validators.dataset(dataset)) {
-      db.getDataset(res, dataset.id, function(data) {
-        if (data) {
-          send409(res, 'Dataset', dataset.id);
+      db.getDataset(dataset.id, function (err, data) {
+        if (err && err.status === 404) {
+          var owner = basicAuth(req)
+          db.createDataset(dataset, owner.name, function (err) {
+            if (err) {
+              send500(res, err.message)
+            } else {
+              // Add createDataset message to queue
+              var message = messages.createDataset(dataset, owner.name)
+              queue.add(message)
+
+              current.createDir(dataset.id)
+              send201(res)
+            }
+          })
+        } else if (data) {
+          send409(res, 'Dataset', dataset.id)
+        } else if (err) {
+          send500(res, err.message)
         } else {
-          var owner = basicAuth(req);
-          db.createDataset(res, dataset, owner.name, function() {
-            current.createDir(dataset.id);
-            send201(res);
-          });
+          send500(res, 'unknown error')
         }
-      });
+      })
     } else {
       res.status(422).send({
         message: validators.dataset.errors
-      });
+      })
     }
   }
+)
 
-);
+function datasetExists (req, res, next) {
+  var dataset = req.params.dataset
+
+  db.getDataset(dataset, function (err) {
+    if (err) {
+      send404(res, 'Dataset', req.params.dataset)
+    } else {
+      next()
+    }
+  })
+}
 
 app.patch('/datasets/:dataset',
-  db.datasetExists,
+  datasetExists,
   auth.ownerForDataset,
-  function(req, res) {
-    var dataset = req.body;
+  function (req, res) {
+    var dataset = req.body
 
-    if (dataset.id == req.params.dataset || dataset.id === undefined) {
+    if (dataset.id === req.params.dataset || dataset.id === undefined) {
       if (validators.dataset(dataset)) {
-        db.updateDataset(res, dataset, function() {
-          send200(res);
-        });
+        db.updateDataset(dataset, function (err) {
+          if (err) {
+            send500(err.message)
+          } else {
+            // Add updateDataset message to queue
+            var message = messages.updateDataset(dataset)
+            queue.add(message)
+
+            send200(res)
+          }
+        })
       } else {
         res.status(422).send({
           message: validators.dataset.errors
-        });
+        })
       }
     } else {
       res.status(422).send({
         message: 'Dataset ID in URL must match dataset ID in JSON body'
-      });
+      })
     }
   }
-
-);
+)
 
 app.delete('/datasets/:dataset',
-  db.datasetExists,
+  datasetExists,
   auth.ownerForDataset,
-  function(req, res) {
-    db.deleteDataset(res, req.params.dataset, function() {
-      send200(res);
+  function (req, res) {
+    db.deleteDataset(req.params.dataset, function (err) {
+      if (err) {
+        send500(err.message)
+      } else {
+        send200(res)
 
-      fs.closeSync(fs.openSync(current.getFilename(req.params.dataset, 'pits'), 'w'));
-      fs.closeSync(fs.openSync(current.getFilename(req.params.dataset, 'relations'), 'w'));
+        var message = messages.deleteDataset(req.params.dataset)
+        queue.add(message)
 
-      diff.fileChanged(req.params.dataset, 'pits', false, function() {
-        diff.fileChanged(req.params.dataset, 'relations', false, function() {
-          fs.removeSync(path.join(config.api.dataDir, 'datasets', req.params.dataset));
-        });
-      });
-    });
+        fs.closeSync(fs.openSync(current.getFilename(req.params.dataset, 'pits'), 'w'))
+        fs.closeSync(fs.openSync(current.getFilename(req.params.dataset, 'relations'), 'w'))
+
+        diff.fileChanged(req.params.dataset, 'pits', false, function () {
+          diff.fileChanged(req.params.dataset, 'relations', false, function () {
+            fs.removeSync(path.join(config.api.dataDir, 'datasets', req.params.dataset))
+          })
+        })
+      }
+    })
   }
+)
 
-);
-
-app.get('/datasets/:dataset', function(req, res) {
-  db.getDataset(res, req.params.dataset, function(data) {
-    if (data) {
-      res.send(data);
+app.get('/datasets/:dataset', function (req, res) {
+  db.getDataset(req.params.dataset, function (err, data) {
+    if (err || !data) {
+      send404(res, 'Dataset', req.params.dataset)
     } else {
-      send404(res, 'Dataset', req.params.dataset);
+      res.send(data)
     }
-  });
-});
+  })
+})
 
 app.get('/datasets/:dataset/:file(pits|relations)',
-  db.datasetExists,
-  function(req, res) {
-    var filename = current.getCurrentFilename(req.params.dataset, req.params.file);
-    fs.exists(filename, function(exists) {
+  datasetExists,
+  function (req, res) {
+    var filename = current.getCurrentFilename(req.params.dataset, req.params.file)
+    fs.exists(filename, function (exists) {
       if (exists) {
-        var stat = fs.statSync(filename);
+        var stat = fs.statSync(filename)
 
         res.writeHead(200, {
           'Content-Type': 'text/plain',
           'Content-Length': stat.size
-        });
-        fs.createReadStream(filename).pipe(res);
+        })
+        fs.createReadStream(filename).pipe(res)
       } else {
-        res.send('');
+        res.send('')
       }
-    });
+    })
   }
-
-);
+)
 
 app.put('/datasets/:dataset/:file(pits|relations)',
-  db.datasetExists,
+  datasetExists,
   auth.ownerForDataset,
-  function(req, res) {
-
+  function (req, res) {
     // when force header is specified, NDJSON files are _not_ diffed,
     // but directly pushed to Redis
-    var force = req.headers['x-histograph-force'] === 'true';
+    var force = req.headers['x-histograph-force'] === 'true'
 
     // TODO this path should fail when content-type is different
-    req.accepts('application/x-ndjson');
+    req.accepts('application/x-ndjson')
 
-    var currentDate = (new Date()).valueOf().toString();
-    var random = Math.random().toString();
+    var currentDate = (new Date()).valueOf().toString()
+    var random = Math.random().toString()
 
-    var uploadedFilename = path.join(config.api.dataDir, 'uploads', crypto.createHash('sha1').update(currentDate + random).digest('hex') + '.ndjson');
+    var uploadedFilename = path.join(
+      config.api.dataDir,
+      'uploads',
+      crypto.createHash('sha1').update(currentDate + random).digest('hex') + '.ndjson'
+    )
 
-    var busboy;
+    var busboy
     try {
       busboy = new Busboy({
         headers: req.headers
-      });
+      })
     } catch (e) {
       // No multi-part data to parse!
     }
@@ -187,70 +243,59 @@ app.put('/datasets/:dataset/:file(pits|relations)',
     if (busboy) {
       // multipart/form-data file upload, use Busboy!
 
-      busboy.on('file', function(fieldname, file) {
-        file.pipe(fs.createWriteStream(uploadedFilename));
-      });
+      busboy.on('file', function (fieldname, file) {
+        file.pipe(fs.createWriteStream(uploadedFilename))
+      })
 
-      busboy.on('finish', function() {
-
-        fs.stat(uploadedFilename, function(err, stat) {
+      busboy.on('finish', function () {
+        fs.stat(uploadedFilename, function (err, stat) {
           if (err || !stat) {
-
-            var message;
+            var message
             if (err && err.error) {
-              message = err.error;
+              message = err.error
             } else {
-              message = 'Error reading uploaded file';
+              message = 'Error reading uploaded file'
             }
 
             res.status(409).send({
               message: message
-            });
+            })
 
-            return;
+            return
           }
 
           if (stat.size <= maxRealTimeCheckFileSize) {
-            uploadedFile.process(res, req.params.dataset, req.params.file, uploadedFilename, force);
+            uploadedFile.process(res, req.params.dataset, req.params.file, uploadedFilename, force)
           } else {
-            send200(res);
-            uploadedFile.process(null, req.params.dataset, req.params.file, uploadedFilename, force);
+            send200(res)
+            uploadedFile.process(null, req.params.dataset, req.params.file, uploadedFilename, force)
           }
-        });
-      });
+        })
+      })
 
-      return req.pipe(busboy);
-
+      return req.pipe(busboy)
     } else {
       // JSON POST data in req.body
-      var contents;
+      var contents
 
-      // Apparently, req.body == {} when JSON POST data is empty
-      if (typeof req.body == 'object' && Object.keys(req.body).length === 0) {
-        contents = '';
+      // Apparently, req.body === {} when JSON POST data is empty
+      if (typeof req.body === 'object' && Object.keys(req.body).length === 0) {
+        contents = ''
       } else {
-        contents = req.body;
+        contents = req.body
       }
 
-      fs.writeFile(uploadedFilename, contents, function(err) {
+      fs.writeFile(uploadedFilename, contents, function (err) {
         if (err) {
           res.status(409).send({
             message: err.error
-          });
+          })
         } else {
-          uploadedFile.process(res, req.params.dataset, req.params.file, uploadedFilename, force);
+          uploadedFile.process(res, req.params.dataset, req.params.file, uploadedFilename, force)
         }
-      });
+      })
     }
   }
-
 )
-.on('error', function(e) {
-  // Call callback function with the error object which comes from the request
-  console.error(e);
-});
 
-fs.mkdirsSync(path.join(config.api.dataDir, 'datasets'));
-fs.mkdirsSync(path.join(config.api.dataDir, 'uploads'));
-
-module.exports = app;
+module.exports = app

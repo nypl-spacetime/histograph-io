@@ -1,6 +1,6 @@
 # Histograph IO
 
-Express routing middleware for [Histograph API](https://github.com/histograph/api). IO is automatically loaded by the API.
+Express routing middleware for [Histograph API](https://github.com/histograph/api). IO is automatically loaded by the API. Alternatively, you can start a standalone version by running `server.js`.
 
 With Histograph IO, you can:
 
@@ -9,21 +9,23 @@ With Histograph IO, you can:
 
 ## Queue format
 
-IO adds PIT and relation changes onto Histograph's Redis queue.
+IO adds dataset, PIT and relation changes onto Histograph's Redis queue.
 
 IO uses the adds messages of the following form, as stringified JSON objects:
 
 ```js
 {
-  "dataset": "dataset1",
-  "type": "pit|relation",
-  "action": "add|delete|update",
-  "data": {
-    // PIT/relation data
+  "type": "dataset|pit|relation",
+  "action": "create|update|delete",
+  "payload": {
+    // dataset/PIT/relation data
+  },
+  "meta": {
+    // message metadata
   }
 }
 ```
 
-The `data` field contains PIT and relation data, conforming to the [Histograph JSON schemas](https://github.com/histograph/schemas/tree/master/json).
+The `payload` field contains dataset, PIT or relation data, conforming to the [Histograph JSON schemas](https://github.com/histograph/schemas/tree/master/json).
 
 Copyright (C) 2015 [Waag Society](http://waag.org).
