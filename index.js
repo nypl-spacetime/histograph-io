@@ -165,15 +165,16 @@ app.delete('/datasets/:dataset',
       } else {
         send200(res)
 
-        var message = messages.deleteDataset(req.params.dataset)
-        queue.add(message)
-
         fs.closeSync(fs.openSync(current.getFilename(req.params.dataset, 'pits'), 'w'))
         fs.closeSync(fs.openSync(current.getFilename(req.params.dataset, 'relations'), 'w'))
 
+        // TODO: err in callbacks!
         diff.fileChanged(req.params.dataset, 'pits', false, function () {
           diff.fileChanged(req.params.dataset, 'relations', false, function () {
             fs.removeSync(path.join(config.api.dataDir, 'datasets', req.params.dataset))
+
+            var message = messages.deleteDataset(req.params.dataset)
+            queue.add(message)
           })
         })
       }
