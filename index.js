@@ -16,7 +16,9 @@ var queue = require('./lib/queue')
 var initialize = require('./lib/initialize')
 var validators = require('./lib/validators')
 var uploadedFile = require('./lib/uploaded-file')
-var config = require('histograph-config')
+var config = require('spacetime-config')
+
+require('./lib/dataset-done')
 
 initialize()
 
@@ -70,7 +72,7 @@ app.get('/datasets', function (req, res) {
     if (err) {
       send500(err.message)
     } else {
-      res.send(datasets)
+      res.send(datasets.map((dataset) => addDateUpdated(dataset.dataset, dataset.meta)))
     }
   })
 })
@@ -83,7 +85,7 @@ app.post('/datasets',
       db.getDataset(dataset.id, function (err, data) {
         if (err && err.status === 404) {
           var owner = basicAuth(req)
-          db.createDataset(dataset, owner.name, function (err) {
+          db.createDataset(dataset, {owner: owner.name}, function (err) {
             if (err) {
               send500(res, err.message)
             } else {
@@ -131,7 +133,7 @@ app.patch('/datasets/:dataset',
 
     if (dataset.id === req.params.dataset || dataset.id === undefined) {
       if (validators.dataset(dataset)) {
-        db.updateDataset(dataset, function (err) {
+        db.updateDataset(dataset, (err) => {
           if (err) {
             send500(err.message)
           } else {
@@ -182,12 +184,16 @@ app.delete('/datasets/:dataset',
   }
 )
 
+function addDateUpdated(dataset, meta) {
+  return Object.assign({}, dataset, {dateUpdated: meta.dateUpdated})
+}
+
 app.get('/datasets/:dataset', function (req, res) {
-  db.getDataset(req.params.dataset, function (err, data) {
-    if (err || !data) {
+  db.getDataset(req.params.dataset, function (err, dataset, meta) {
+    if (err || !dataset) {
       send404(res, 'Dataset', req.params.dataset)
     } else {
-      res.send(data)
+      res.send(addDateUpdated(dataset, meta))
     }
   })
 })
